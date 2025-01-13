@@ -22,19 +22,18 @@ class GoogleSearchClient:
     def __init__(self):
         self.api_key = None
 
-    def initialize(self):
-        """Initialize the API key"""
-        self.api_key = os.getenv('SERPAPI_KEY')
+    def get_api_key(self):
+        """Get API key from environment, allowing for runtime updates"""
         if not self.api_key:
-            log_debug("Error: SERPAPI_KEY not found in environment variables")
-            raise EnvironmentError('SERPAPI_KEY environment variable is required. Please set it in the Secrets tab.')
-        return True
+            self.api_key = os.environ.get('SERPAPI_KEY')
+        return self.api_key
 
     def search(self, query: str, num_results: int = 5):
         """Perform a Google search and return results"""
+        self.api_key = self.get_api_key()
         if not self.api_key:
-            if not self.initialize():
-                return []
+            log_debug("Warning: SERPAPI_KEY not available")
+            return []
 
         try:
             params = {
@@ -47,7 +46,6 @@ class GoogleSearchClient:
             search = GoogleSearch(params)
             results = search.get_dict()
 
-            # Extract organic results
             if "organic_results" in results:
                 return results["organic_results"]
             return []
@@ -62,9 +60,16 @@ class ResearchHandler:
 
     def handle_market_research(self, query):
         """Handle market research queries using real search results"""
+        if not self.search_client.get_api_key():
+            return {
+                "market_analysis": {
+                    "status": "error",
+                    "message": "SERPAPI_KEY not configured. Service partially available."
+                }
+            }
+
         business_idea = query.get('business_idea', '')
 
-        # Perform multiple targeted searches
         market_size = self.search_client.search(f"{business_idea} market size Singapore statistics")
         competitors = self.search_client.search(f"{business_idea} top competitors Singapore")
         trends = self.search_client.search(f"{business_idea} industry trends Singapore 2024")
@@ -80,7 +85,6 @@ class ResearchHandler:
         }
 
     def _extract_market_info(self, results):
-        """Extract and format market information from search results"""
         info = []
         for result in results[:3]:
             if "snippet" in result:
@@ -88,7 +92,6 @@ class ResearchHandler:
         return "\n".join(info) if info else "Information not available"
 
     def _extract_competitor_info(self, results):
-        """Extract and format competitor information"""
         competitors = []
         for result in results[:5]:
             if "title" in result:
@@ -96,7 +99,6 @@ class ResearchHandler:
         return "\n".join(f"{i+1}. {comp}" for i, comp in enumerate(competitors))
 
     def _extract_trend_info(self, results):
-        """Extract and format trend information"""
         trends = []
         for result in results[:3]:
             if "snippet" in result:
@@ -104,7 +106,6 @@ class ResearchHandler:
         return "\n".join(f"- {trend}" for trend in trends)
 
     def _analyze_opportunities(self, results):
-        """Analyze and extract business opportunities"""
         opportunities = []
         for result in results[:3]:
             if "snippet" in result:
@@ -112,7 +113,6 @@ class ResearchHandler:
         return "\n".join(f"- {opp}" for opp in opportunities)
 
     def _analyze_risks(self, results):
-        """Analyze and extract potential risks"""
         risks = set()
         for result in results[:5]:
             if "snippet" in result:
@@ -124,18 +124,38 @@ class ResearchHandler:
 @app.route('/')
 def home():
     """Home page route"""
-    api_status = "🟢 Ready" if os.getenv('SERPAPI_KEY') else "🔴 API Key not configured"
-    return f"""Research Bot is running!
-Status: {api_status}
-Endpoints:
-- GET /: This page
-- GET /test: Test endpoint
-- POST /webhook: Research request endpoint"""
+    try:
+        api_key = os.environ.get('SERPAPI_KEY')
+        api_status = "🟢 Ready" if api_key else "🔸 Waiting for API key"
+        response = {
+            "status": "running",
+            "message": "Research Bot is operational",
+            "api_status": api_status,
+            "endpoints": {
+                "root": "GET /",
+                "test": "GET /test",
+                "webhook": "POST /webhook"
+            }
+        }
+        return jsonify(response)
+    except Exception as e:
+        log_debug(f"Error in home route: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/test')
 def test():
     """Test endpoint"""
-    return "Test endpoint is working!"
+    try:
+        api_key = os.environ.get('SERPAPI_KEY')
+        return jsonify({
+            "status": "operational",
+            "timestamp": datetime.now().isoformat(),
+            "api_configured": bool(api_key),
+            "message": "Test endpoint is working!"
+        })
+    except Exception as e:
+        log_debug(f"Error in test route: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -167,5 +187,10 @@ def webhook():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 if __name__ == "__main__":
-    log_debug(f"Starting Research Bot on port 8080...")
-    app.run(host='0.0.0.0', port=8080)
+    # Get port from environment variable or default to 8080
+    port = int(os.environ.get('PORT', 80))
+    log_debug(f"Starting Research Bot on port {port}...")
+    # Log initial API key status
+    api_key = os.environ.get('SERPAPI_KEY')
+    log_debug(f"API Key Status: {'Configured' if api_key else 'Not configured'}")
+    app.run(host='0.0.0.0', port=port)
