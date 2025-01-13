@@ -60,14 +60,6 @@ class ResearchHandler:
 
     def handle_market_research(self, query):
         """Handle market research queries using real search results"""
-        if not self.search_client.get_api_key():
-            return {
-                "market_analysis": {
-                    "status": "error",
-                    "message": "SERPAPI_KEY not configured. Service partially available."
-                }
-            }
-
         business_idea = query.get('business_idea', '')
 
         market_size = self.search_client.search(f"{business_idea} market size Singapore statistics")
@@ -76,50 +68,97 @@ class ResearchHandler:
 
         return {
             "market_analysis": {
-                "target_market": self._extract_market_info(market_size),
-                "competitors": self._extract_competitor_info(competitors),
-                "market_trends": self._extract_trend_info(trends),
-                "opportunities": self._analyze_opportunities(trends),
-                "risks": self._analyze_risks(competitors + market_size)
+                "target_market": self._extract_text(market_size),
+                "competitors": self._extract_titles(competitors),
+                "market_trends": self._extract_text(trends),
+                "opportunities": self._extract_text(trends),
+                "risks": self._extract_risks(market_size + competitors)
             }
         }
 
-    def _extract_market_info(self, results):
-        info = []
+    def handle_recipe_research(self, query):
+        """Handle recipe research queries"""
+        recipe = query.get('recipe_request', '')
+
+        instructions = self.search_client.search(f"{recipe} recipe how to make step by step")
+        ingredients = self.search_client.search(f"{recipe} recipe ingredients list")
+        nutrition = self.search_client.search(f"{recipe} nutrition facts calories")
+
+        return {
+            "recipe_info": {
+                "name": recipe,
+                "ingredients": self._extract_text(ingredients),
+                "instructions": self._extract_text(instructions),
+                "nutrition": self._extract_text(nutrition),
+                "cooking_time": "30-45 minutes",  # Default value
+                "difficulty": "Medium"  # Default value
+            }
+        }
+
+    def handle_holiday_itinerary(self, query):
+        """Handle holiday itinerary queries"""
+        destination = query.get('destination', '')
+
+        attractions = self.search_client.search(f"{destination} top tourist attractions must visit")
+        hotels = self.search_client.search(f"{destination} best hotels where to stay")
+        travel_tips = self.search_client.search(f"{destination} travel guide tips local customs")
+        food = self.search_client.search(f"{destination} best restaurants local food must try")
+
+        return {
+            "travel_guide": {
+                "attractions": self._extract_titles(attractions),
+                "accommodations": self._extract_titles(hotels),
+                "dining": self._extract_titles(food),
+                "travel_tips": self._extract_text(travel_tips),
+                "local_info": self._extract_text(travel_tips[:2])
+            }
+        }
+
+    def handle_restaurant_research(self, query):
+        """Handle restaurant research queries"""
+        occasion = query.get('occasion', '')
+        location = "Singapore"  # Default to Singapore
+
+        restaurants = self.search_client.search(f"best restaurants {location} {occasion}")
+        cuisine = self.search_client.search(f"recommended restaurants {location} {occasion} cuisine")
+        reviews = self.search_client.search(f"top rated restaurants {location} {occasion} reviews")
+
+        return {
+            "dining_suggestions": {
+                "recommendations": self._extract_titles(restaurants),
+                "cuisines": self._extract_titles(cuisine),
+                "reviews": self._extract_text(reviews),
+                "price_range": "$$ - $$$",  # Default value
+                "ambiance": self._extract_text(reviews[:1])
+            }
+        }
+
+    def _extract_text(self, results):
+        """Extract and combine text from search results"""
+        texts = []
         for result in results[:3]:
             if "snippet" in result:
-                info.append(result["snippet"])
-        return "\n".join(info) if info else "Information not available"
+                texts.append(result["snippet"])
+        return "\n".join(texts) if texts else "Information not available"
 
-    def _extract_competitor_info(self, results):
-        competitors = []
+    def _extract_titles(self, results):
+        """Extract titles from search results"""
+        titles = []
         for result in results[:5]:
             if "title" in result:
-                competitors.append(result["title"].split('-')[0].strip())
-        return "\n".join(f"{i+1}. {comp}" for i, comp in enumerate(competitors))
+                titles.append(result["title"])
+        return titles if titles else ["No information available"]
 
-    def _extract_trend_info(self, results):
-        trends = []
-        for result in results[:3]:
-            if "snippet" in result:
-                trends.append(result["snippet"])
-        return "\n".join(f"- {trend}" for trend in trends)
-
-    def _analyze_opportunities(self, results):
-        opportunities = []
-        for result in results[:3]:
-            if "snippet" in result:
-                opportunities.append(result["snippet"])
-        return "\n".join(f"- {opp}" for opp in opportunities)
-
-    def _analyze_risks(self, results):
-        risks = set()
+    def _extract_risks(self, results):
+        """Extract risk-related information"""
+        risks = []
+        risk_keywords = ["challenge", "risk", "problem", "difficult", "competition"]
         for result in results[:5]:
             if "snippet" in result:
                 text = result["snippet"].lower()
-                if any(word in text for word in ["challenge", "risk", "problem", "difficult"]):
-                    risks.add(result["snippet"])
-        return "\n".join(f"- {risk}" for risk in risks)
+                if any(keyword in text for keyword in risk_keywords):
+                    risks.append(result["snippet"])
+        return "\n".join(risks) if risks else "No specific risks identified"
 
 @app.route('/')
 def home():
@@ -176,18 +215,29 @@ def webhook():
         research_type = data['research_type']
         query = data.get('query', {})
 
-        if research_type == 'market_research':
-            result = handler.handle_market_research(query)
-            return jsonify({'status': 'success', 'result': result, 'research_type': research_type})
-        else:
+        handlers = {
+            'market_research': handler.handle_market_research,
+            'recipe_research': handler.handle_recipe_research,
+            'holiday_itinerary': handler.handle_holiday_itinerary,
+            'restaurant_research': handler.handle_restaurant_research
+        }
+
+        if research_type not in handlers:
             return jsonify({'status': 'error', 'message': f'Invalid research type: {research_type}'}), 400
+
+        result = handlers[research_type](query)
+        return jsonify({
+            'status': 'success',
+            'result': result,
+            'research_type': research_type
+        })
 
     except Exception as e:
         logger.error(f"Error in webhook: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 if __name__ == "__main__":
-    # Get port from environment variable or default to 8080
     port = int(os.environ.get('PORT', 80))
     log_debug(f"Starting Research Bot on port {port}...")
     # Log initial API key status
